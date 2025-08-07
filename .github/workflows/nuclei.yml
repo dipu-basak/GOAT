@@ -1,5 +1,4 @@
 name: Nuclei Terminal Trigger
-
 on:
   workflow_dispatch:
     inputs:
@@ -21,34 +20,31 @@ on:
       telegram_chat_id:
         required: true
         type: string
-
 jobs:
   scan:
     runs-on: ubuntu-latest
-
     steps:
       - name: Install Nuclei
         run: |
           latest_url=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
-            | jq -r '.assets[] | select(.name | test("linux-amd64.zip$")) | .browser_download_url' | head -n1)
-            echo "Downloading $latest_url"
-            wget "$latest_url" -O nuclei-linux-amd64.zip
-            unzip nuclei-linux-amd64.zip
-            chmod +x nuclei
-            sudo mv nuclei /usr/local/bin/
-
-
+            | jq -r '.assets[] | select(.name | contains("linux-amd64") and endswith(".zip")) | .browser_download_url' | head -n1)
+          echo "Downloading $latest_url"
+          if [ -z "$latest_url" ] || [ "$latest_url" = "null" ]; then
+            echo "Failed to get download URL"
+            exit 1
+          fi
+          wget "$latest_url" -O nuclei-linux-amd64.zip
+          unzip nuclei-linux-amd64.zip
+          chmod +x nuclei
+          sudo mv nuclei /usr/local/bin/
       - name: Download target list
         run: curl -L "${{ inputs.file_url }}" -o targets.txt
-
       - name: Clone Nuclei templates
         run: git clone https://github.com/projectdiscovery/nuclei-templates.git
-
       - name: Run Nuclei
         run: |
           echo "Running nuclei with flags: ${{ inputs.nuclei_flags }}"
           nuclei -l targets.txt -t nuclei-templates/${{ inputs.template_path }} ${{ inputs.nuclei_flags }} -o result.txt
-
       - name: Send result to Telegram
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -58,7 +54,6 @@ jobs:
           else
             echo "No results to send"
           fi
-
       - name: Auto-delete uploaded file
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
