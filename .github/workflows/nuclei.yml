@@ -26,13 +26,25 @@ jobs:
     steps:
       - name: Install Nuclei
         run: |
-          latest_url=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
-            | jq -r '.assets[] | select(.name | contains("linux-amd64") and endswith(".zip")) | .browser_download_url' | head -n1)
-          echo "Downloading $latest_url"
+          echo "Fetching latest release info..."
+          latest_release=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest)
+          echo "Available assets:"
+          echo "$latest_release" | jq -r '.assets[].name'
+          
+          latest_url=$(echo "$latest_release" | jq -r '.assets[] | select(.name | test("nuclei.*linux.*amd64.*\\.zip$")) | .browser_download_url' | head -n1)
+          
           if [ -z "$latest_url" ] || [ "$latest_url" = "null" ]; then
-            echo "Failed to get download URL"
+            echo "Failed to get download URL, trying alternative pattern..."
+            latest_url=$(echo "$latest_release" | jq -r '.assets[] | select(.name | contains("linux") and contains("amd64") and endswith(".zip")) | .browser_download_url' | head -n1)
+          fi
+          
+          if [ -z "$latest_url" ] || [ "$latest_url" = "null" ]; then
+            echo "Still failed, showing all assets:"
+            echo "$latest_release" | jq -r '.assets[] | .name + " -> " + .browser_download_url'
             exit 1
           fi
+          
+          echo "Downloading $latest_url"
           wget "$latest_url" -O nuclei-linux-amd64.zip
           unzip nuclei-linux-amd64.zip
           chmod +x nuclei
