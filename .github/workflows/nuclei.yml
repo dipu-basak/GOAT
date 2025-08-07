@@ -1,0 +1,68 @@
+name: Nuclei Terminal Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        required: true
+        type: string
+      file_name:
+        required: true
+        type: string
+      upload_sha:
+        required: true
+        type: string
+      template_path:
+        required: true
+        type: string
+      nuclei_flags:
+        required: false
+        type: string
+      telegram_chat_id:
+        required: true
+        type: string
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Nuclei
+        run: |
+          curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
+          | grep "browser_download_url.*nuclei-linux-amd64.zip" \
+          | cut -d '"' -f 4 | wget -i -
+          unzip nuclei-linux-amd64.zip
+          chmod +x nuclei
+          sudo mv nuclei /usr/local/bin
+
+      - name: Download target list
+        run: curl -L "${{ inputs.file_url }}" -o targets.txt
+
+      - name: Clone Nuclei templates
+        run: git clone https://github.com/projectdiscovery/nuclei-templates.git
+
+      - name: Run Nuclei
+        run: |
+          echo "Running nuclei with flags: ${{ inputs.nuclei_flags }}"
+          nuclei -l targets.txt -t nuclei-templates/${{ inputs.template_path }} ${{ inputs.nuclei_flags }} -o result.txt
+
+      - name: Send result to Telegram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        run: |
+          if [ -s result.txt ]; then
+            curl -F document=@result.txt "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument?chat_id=${{ inputs.telegram_chat_id }}"
+          else
+            echo "No results to send"
+          fi
+
+      - name: Auto-delete uploaded file
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          curl -s -X DELETE \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"message\": \"Delete uploaded file\", \"sha\": \"${{ inputs.upload_sha }}\"}" \
+            "https://api.github.com/repos/${{ github.repository }}/contents/uploads/${{ inputs.file_name }}"
