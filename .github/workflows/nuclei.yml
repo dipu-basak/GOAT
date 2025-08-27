@@ -1,100 +1,123 @@
-name: Nuclei Pipeline
+name: Security Scanning Pipeline
 
 on:
   workflow_dispatch:
     inputs:
-      tools:
-        required: true
-        type: string
-        description: "Tools to run (e.g., 'subfinder httpx nuclei' or 'httpx nuclei' or 'nuclei')"
-      file_url:
-        required: true
-        type: string
-        description: "URL to input file"
       file_name:
         required: true
         type: string
-      subfinder_command:
-        required: false
+        description: "Input file name"
+      command:
+        required: true
         type: string
-      httpx_command:
-        required: false
-        type: string
-      nuclei_command:
-        required: false
-        type: string
+        description: "Command to execute (cat filename will be auto-prepended, notify auto-appended)"
 
 jobs:
-  pipeline:
+  scan:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Install dependencies
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        
+      - name: Cache tools
+        id: cache-tools
+        uses: actions/cache@v3
+        with:
+          path: ~/tools
+          key: pdtools-v1-${{ runner.os }}
+          
+      - name: Install security tools
+        if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y unzip jq git wget golang
-
-          echo "[*] Installing subfinder..."
-          go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-          sudo mv ~/go/bin/subfinder /usr/local/bin/
-
-          echo "[*] Installing httpx..."
-          go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
-          sudo mv ~/go/bin/httpx /usr/local/bin/
-
-          echo "[*] Installing nuclei..."
-          go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest
-          sudo mv ~/go/bin/nuclei /usr/local/bin/
-
-      - name: Clone templates
+          echo "[*] Installing ProjectDiscovery tools (not cached)..."
+          mkdir -p ~/tools
+          
+          # Download pre-compiled binaries (much faster than go install)
+          echo "[*] Downloading subfinder..."
+          wget -q https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_2.6.3_linux_amd64.zip
+          unzip -q subfinder_2.6.3_linux_amd64.zip
+          mv subfinder ~/tools/
+          
+          echo "[*] Downloading httpx..."
+          wget -q https://github.com/projectdiscovery/httpx/releases/latest/download/httpx_1.3.7_linux_amd64.zip
+          unzip -q httpx_1.3.7_linux_amd64.zip
+          mv httpx ~/tools/
+          
+          echo "[*] Downloading nuclei..."
+          wget -q https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_2.9.15_linux_amd64.zip
+          unzip -q nuclei_2.9.15_linux_amd64.zip
+          mv nuclei ~/tools/
+          
+          echo "[*] Downloading notify..."
+          wget -q https://github.com/projectdiscovery/notify/releases/latest/download/notify_1.0.6_linux_amd64.zip
+          unzip -q notify_1.0.6_linux_amd64.zip
+          mv notify ~/tools/
+          
+          chmod +x ~/tools/*
+          echo "[+] Tools downloaded successfully"
+          
+      - name: Setup tool paths
         run: |
-          if [ ! -d nuclei-templates ]; then
-            git clone https://github.com/projectdiscovery/nuclei-templates.git
-          else
-            cd nuclei-templates && git pull origin main && cd ..
+          # Add tools to PATH
+          echo "$HOME/tools" >> $GITHUB_PATH
+          
+          # Verify installations
+          echo "[*] Verifying tool installations..."
+          ~/tools/subfinder -version || echo "subfinder not found"
+          ~/tools/httpx -version || echo "httpx not found" 
+          ~/tools/nuclei -version || echo "nuclei not found"
+          ~/tools/notify -version || echo "notify not found"
+          
+      - name: Cache nuclei templates
+        id: cache-templates
+        uses: actions/cache@v3
+        with:
+          path: nuclei-templates
+          key: nuclei-templates-${{ github.run_id }}
+          restore-keys: nuclei-templates-
+          
+      - name: Clone nuclei templates
+        if: steps.cache-templates.outputs.cache-hit != 'true'
+        run: |
+          echo "[*] Cloning nuclei templates..."
+          git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git
+          echo "[+] Templates cloned"
+          
+      - name: Verify input file exists
+        run: |
+          if [ ! -f "${{ inputs.file_name }}" ]; then
+            echo "[!] Input file ${{ inputs.file_name }} not found in repository"
+            echo "[*] Available files:"
+            ls -la
+            exit 1
           fi
-
-      - name: Download input file
-        run: curl -sL "${{ inputs.file_url }}" -o "${{ inputs.file_name }}"
-
-      - name: Run pipeline
+          echo "[+] Input file ${{ inputs.file_name }} found"
+          echo "[*] File size: $(wc -l < ${{ inputs.file_name }}) lines"
+          
+      - name: Execute scanning command
         run: |
+          echo "[*] Executing command: ${{ inputs.command }}"
+          echo "[*] Started at: $(date)"
+          
+          # Create results directory
           mkdir -p results
-          timestamp=$(date +%Y%m%d-%H%M%S)
-          outfile="results/result-$timestamp.txt"
-
-          file="${{ inputs.file_name }}"
-          pipeline="cat \"$file\""
-
-          for tool in ${{ inputs.tools }}; do
-            case "$tool" in
-              subfinder)
-                pipeline+=" | subfinder ${{ inputs.subfinder_command }}"
-                ;;
-              httpx)
-                pipeline+=" | httpx ${{ inputs.httpx_command }}"
-                ;;
-              nuclei)
-                if [[ "${{ inputs.tools }}" == "nuclei" ]]; then
-                  pipeline="nuclei -l \"$file\" ${{ inputs.nuclei_command }}"
-                else
-                  pipeline+=" | nuclei ${{ inputs.nuclei_command }}"
-                fi
-                ;;
-            esac
-          done
-
-          echo "[*] Executing: $pipeline"
-          eval "$pipeline" | tee "$outfile"
-
-      - name: Send result to Telegram
-        if: always()
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          outfile=$(ls results/result-*.txt | tail -n1)
-          if [ -s "$outfile" ]; then
-            curl -s -F document=@"$outfile" "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument?chat_id=$TELEGRAM_CHAT_ID"
+          
+          # Execute the command with error handling
+          if eval "${{ inputs.command }}"; then
+            echo "[+] Scanning completed successfully"
           else
-            echo "No results to send"
+            echo "[!] Scanning failed with exit code $?"
+            # Still try to send notification about failure
+            echo "Scanning failed for ${{ inputs.file_name }}" | notify -pc creds.yml -silent || true
+            exit 1
           fi
+          
+          echo "[*] Completed at: $(date)"
+          
+      - name: Cleanup
+        if: always()
+        run: |
+          # Clean up large files to save space
+          rm -rf nuclei-templates
+          echo "[+] Cleanup completed"
