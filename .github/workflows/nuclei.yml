@@ -1,77 +1,100 @@
-name: Nuclei Terminal Trigger
+name: Nuclei Pipeline
+
 on:
   workflow_dispatch:
     inputs:
+      tools:
+        required: true
+        type: string
+        description: "Tools to run (e.g., 'subfinder httpx nuclei' or 'httpx nuclei' or 'nuclei')"
       file_url:
         required: true
         type: string
+        description: "URL to input file"
       file_name:
         required: true
         type: string
-      upload_sha:
-        required: true
-        type: string
-      template_path:
-        required: true
-        type: string
-      nuclei_flags:
+      subfinder_command:
         required: false
         type: string
-      telegram_chat_id:
-        required: true
+      httpx_command:
+        required: false
         type: string
+      nuclei_command:
+        required: false
+        type: string
+
 jobs:
-  scan:
+  pipeline:
     runs-on: ubuntu-latest
     steps:
-      - name: Install Nuclei
+      - name: Install dependencies
         run: |
-          echo "Fetching latest release info..."
-          latest_release=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest)
-          echo "Available assets:"
-          echo "$latest_release" | jq -r '.assets[].name'
-          
-          latest_url=$(echo "$latest_release" | jq -r '.assets[] | select(.name | test("nuclei.*linux.*amd64.*\\.zip$")) | .browser_download_url' | head -n1)
-          
-          if [ -z "$latest_url" ] || [ "$latest_url" = "null" ]; then
-            echo "Failed to get download URL, trying alternative pattern..."
-            latest_url=$(echo "$latest_release" | jq -r '.assets[] | select(.name | contains("linux") and contains("amd64") and endswith(".zip")) | .browser_download_url' | head -n1)
-          fi
-          
-          if [ -z "$latest_url" ] || [ "$latest_url" = "null" ]; then
-            echo "Still failed, showing all assets:"
-            echo "$latest_release" | jq -r '.assets[] | .name + " -> " + .browser_download_url'
-            exit 1
-          fi
-          
-          echo "Downloading $latest_url"
-          wget "$latest_url" -O nuclei-linux-amd64.zip
-          unzip nuclei-linux-amd64.zip
-          chmod +x nuclei
-          sudo mv nuclei /usr/local/bin/
-      - name: Download target list
-        run: curl -L "${{ inputs.file_url }}" -o targets.txt
-      - name: Clone Nuclei templates
-        run: git clone https://github.com/projectdiscovery/nuclei-templates.git
-      - name: Run Nuclei
+          sudo apt-get update -y
+          sudo apt-get install -y unzip jq git wget golang
+
+          echo "[*] Installing subfinder..."
+          go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+          sudo mv ~/go/bin/subfinder /usr/local/bin/
+
+          echo "[*] Installing httpx..."
+          go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+          sudo mv ~/go/bin/httpx /usr/local/bin/
+
+          echo "[*] Installing nuclei..."
+          go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest
+          sudo mv ~/go/bin/nuclei /usr/local/bin/
+
+      - name: Clone templates
         run: |
-          echo "Running nuclei with flags: ${{ inputs.nuclei_flags }}"
-          nuclei -l targets.txt -t nuclei-templates/${{ inputs.template_path }} ${{ inputs.nuclei_flags }} -o result.txt
+          if [ ! -d nuclei-templates ]; then
+            git clone https://github.com/projectdiscovery/nuclei-templates.git
+          else
+            cd nuclei-templates && git pull origin main && cd ..
+          fi
+
+      - name: Download input file
+        run: curl -sL "${{ inputs.file_url }}" -o "${{ inputs.file_name }}"
+
+      - name: Run pipeline
+        run: |
+          mkdir -p results
+          timestamp=$(date +%Y%m%d-%H%M%S)
+          outfile="results/result-$timestamp.txt"
+
+          file="${{ inputs.file_name }}"
+          pipeline="cat \"$file\""
+
+          for tool in ${{ inputs.tools }}; do
+            case "$tool" in
+              subfinder)
+                pipeline+=" | subfinder ${{ inputs.subfinder_command }}"
+                ;;
+              httpx)
+                pipeline+=" | httpx ${{ inputs.httpx_command }}"
+                ;;
+              nuclei)
+                if [[ "${{ inputs.tools }}" == "nuclei" ]]; then
+                  pipeline="nuclei -l \"$file\" ${{ inputs.nuclei_command }}"
+                else
+                  pipeline+=" | nuclei ${{ inputs.nuclei_command }}"
+                fi
+                ;;
+            esac
+          done
+
+          echo "[*] Executing: $pipeline"
+          eval "$pipeline" | tee "$outfile"
+
       - name: Send result to Telegram
+        if: always()
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          if [ -s result.txt ]; then
-            curl -F document=@result.txt "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument?chat_id=${{ inputs.telegram_chat_id }}"
+          outfile=$(ls results/result-*.txt | tail -n1)
+          if [ -s "$outfile" ]; then
+            curl -s -F document=@"$outfile" "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument?chat_id=$TELEGRAM_CHAT_ID"
           else
             echo "No results to send"
           fi
-      - name: Auto-delete uploaded file
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          curl -s -X DELETE \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            -d "{\"message\": \"Delete uploaded file\", \"sha\": \"${{ inputs.upload_sha }}\"}" \
-            "https://api.github.com/repos/${{ github.repository }}/contents/uploads/${{ inputs.file_name }}"
