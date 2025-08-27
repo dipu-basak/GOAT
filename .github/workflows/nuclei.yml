@@ -102,23 +102,23 @@ jobs:
           
       - name: Verify input file exists
         run: |
-          if [ ! -f "${{ inputs.file_name }}" ]; then
-            echo "[!] Input file ${{ inputs.file_name }} not found in repository"
-            echo "[*] Available files:"
-            ls -la
+          if [ ! -f "upload/${{ inputs.file_name }}" ]; then
+            echo "[!] Input file upload/${{ inputs.file_name }} not found in repository"
+            echo "[*] Available files in upload directory:"
+            ls -la upload/ || echo "Upload directory doesn't exist"
             exit 1
           fi
-          echo "[+] Input file ${{ inputs.file_name }} found"
-          echo "[*] File size: $(wc -l < ${{ inputs.file_name }}) lines"
+          echo "[+] Input file upload/${{ inputs.file_name }} found"
+          echo "[*] File size: $(wc -l < upload/${{ inputs.file_name }}) lines"
           
       - name: Execute scanning pipeline
         run: |
           echo "[*] Building pipeline..."
-          echo "[*] Input file: ${{ inputs.file_name }}"
+          echo "[*] Input file: upload/${{ inputs.file_name }}"
           echo "[*] Command: ${{ inputs.command }}"
           
           # Build the complete pipeline
-          FULL_PIPELINE="cat ${{ inputs.file_name }} | ${{ inputs.command }} | notify -pc temp_creds.yml -silent"
+          FULL_PIPELINE="cat upload/${{ inputs.file_name }} | ${{ inputs.command }} | notify -pc temp_creds.yml -silent"
           
           echo "[*] Final pipeline: $FULL_PIPELINE"
           echo "[*] Started at: $(date)"
@@ -129,7 +129,7 @@ jobs:
           else
             echo "[!] Pipeline failed with exit code $?"
             # Send failure notification
-            echo "❌ Scanning failed for ${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
+            echo "❌ Scanning failed for upload/${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
             exit 1
           fi
           
