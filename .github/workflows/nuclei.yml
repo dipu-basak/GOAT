@@ -10,7 +10,7 @@ on:
       command:
         required: true
         type: string
-        description: "Command to execute (cat filename will be auto-prepended, notify auto-appended)"
+        description: "Command to execute (cat filename and notify will be auto-handled)"
 
 jobs:
   scan:
@@ -84,6 +84,22 @@ jobs:
           git clone --depth 1 https://github.com/projectdiscovery/nuclei-templates.git
           echo "[+] Templates cloned"
           
+      - name: Create notify credentials file
+        env:
+          TELEGRAM_API_KEY: ${{ secrets.TELEGRAM_API_KEY }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "[*] Creating temporary notify credentials file..."
+          cat > temp_creds.yml << EOF
+          telegram:
+            - id: "tel"
+              telegram_api_key: "$TELEGRAM_API_KEY"
+              telegram_chat_id: "$TELEGRAM_CHAT_ID"
+              telegram_format: "{{data}}"
+              telegram_parsemode: "Markdown"
+          EOF
+          echo "[+] Temporary credentials file created"
+          
       - name: Verify input file exists
         run: |
           if [ ! -f "${{ inputs.file_name }}" ]; then
@@ -95,21 +111,25 @@ jobs:
           echo "[+] Input file ${{ inputs.file_name }} found"
           echo "[*] File size: $(wc -l < ${{ inputs.file_name }}) lines"
           
-      - name: Execute scanning command
+      - name: Execute scanning pipeline
         run: |
-          echo "[*] Executing command: ${{ inputs.command }}"
+          echo "[*] Building pipeline..."
+          echo "[*] Input file: ${{ inputs.file_name }}"
+          echo "[*] Command: ${{ inputs.command }}"
+          
+          # Build the complete pipeline
+          FULL_PIPELINE="cat ${{ inputs.file_name }} | ${{ inputs.command }} | notify -pc temp_creds.yml -silent"
+          
+          echo "[*] Final pipeline: $FULL_PIPELINE"
           echo "[*] Started at: $(date)"
           
-          # Create results directory
-          mkdir -p results
-          
-          # Execute the command with error handling
-          if eval "${{ inputs.command }}"; then
-            echo "[+] Scanning completed successfully"
+          # Execute the complete pipeline with error handling
+          if eval "$FULL_PIPELINE"; then
+            echo "[+] Pipeline completed successfully"
           else
-            echo "[!] Scanning failed with exit code $?"
-            # Still try to send notification about failure
-            echo "Scanning failed for ${{ inputs.file_name }}" | notify -pc creds.yml -silent || true
+            echo "[!] Pipeline failed with exit code $?"
+            # Send failure notification
+            echo "❌ Scanning failed for ${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
             exit 1
           fi
           
@@ -118,6 +138,7 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          # Clean up large files to save space
+          # Clean up temporary files
+          rm -f temp_creds.yml
           rm -rf nuclei-templates
           echo "[+] Cleanup completed"
