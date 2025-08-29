@@ -63,8 +63,8 @@ jobs:
           mv notify ~/tools/
 
           echo "[*] Downloading katana..."
-          wget -q https://github.com/projectdiscovery/katana/releases/latest/download/katana_1.1.1_linux_amd64.zip
-          unzip -o -q katana_1.1.1_linux_amd64.zip
+          wget -q https://github.com/projectdiscovery/katana/releases/latest/download/katana_1.2.1_linux_amd64.zip
+          unzip -o -q katana_1.2.1_linux_amd64.zip
           mv katana ~/tools/
           
           chmod +x ~/tools/*
