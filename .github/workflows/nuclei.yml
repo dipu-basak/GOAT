@@ -10,15 +10,20 @@ on:
       command:
         required: true
         type: string
-        description: "Command to execute (cat filename will be auto-handled)"
-      notify_mode:
+        description: "Command to execute (cat filename and notify will be auto-handled)"
+      notification_mode:
         required: false
         type: choice
         default: "line"
-        description: "Notification mode (line = line by line, bulk = full file)"
+        description: "Notification mode"
         options:
           - line
           - bulk
+      bulk_filename:
+        required: false
+        type: string
+        default: "results.txt"
+        description: "Output filename for bulk mode (only used when notification_mode is bulk)"
 
 jobs:
   scan:
@@ -33,7 +38,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ~/tools
-          key: pdtools-v1-${{ runner.os }}
+          key: pdtools-v2-${{ runner.os }}
           
       - name: Install security tools
         if: steps.cache-tools.outputs.cache-hit != 'true'
@@ -41,7 +46,7 @@ jobs:
           echo "[*] Installing ProjectDiscovery tools (not cached)..."
           mkdir -p ~/tools
           
-          # Download pre-compiled binaries (faster than go install)
+          # Download pre-compiled binaries (much faster than go install)
           echo "[*] Downloading subfinder..."
           wget -q https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_2.8.0_linux_amd64.zip
           unzip -o -q subfinder_2.8.0_linux_amd64.zip
@@ -57,29 +62,31 @@ jobs:
           unzip -o -q nuclei_3.4.10_linux_amd64.zip
           mv nuclei ~/tools/
           
-          echo "[*] Downloading notify..."
-          wget -q https://github.com/projectdiscovery/notify/releases/latest/download/notify_1.0.7_linux_amd64.zip
-          unzip -o -q notify_1.0.7_linux_amd64.zip
-          mv notify ~/tools/
-
           echo "[*] Downloading katana..."
           wget -q https://github.com/projectdiscovery/katana/releases/latest/download/katana_1.2.1_linux_amd64.zip
           unzip -o -q katana_1.2.1_linux_amd64.zip
           mv katana ~/tools/
+          
+          echo "[*] Downloading notify..."
+          wget -q https://github.com/projectdiscovery/notify/releases/latest/download/notify_1.0.7_linux_amd64.zip
+          unzip -o -q notify_1.0.7_linux_amd64.zip
+          mv notify ~/tools/
           
           chmod +x ~/tools/*
           echo "[+] Tools downloaded successfully"
           
       - name: Setup tool paths
         run: |
+          # Add tools to PATH
           echo "$HOME/tools" >> $GITHUB_PATH
           
+          # Verify installations
           echo "[*] Verifying tool installations..."
           ~/tools/subfinder -version || echo "subfinder not found"
           ~/tools/httpx -version || echo "httpx not found" 
           ~/tools/nuclei -version || echo "nuclei not found"
-          ~/tools/notify -version || echo "notify not found"
           ~/tools/katana -version || echo "katana not found"
+          ~/tools/notify -version || echo "notify not found"
           
       - name: Cache nuclei templates
         id: cache-templates
@@ -128,33 +135,82 @@ jobs:
           echo "[*] Building pipeline..."
           echo "[*] Input file: upload/${{ inputs.file_name }}"
           echo "[*] Command: ${{ inputs.command }}"
-          echo "[*] Notify mode: ${{ inputs.notify_mode }}"
+          echo "[*] Notification mode: ${{ inputs.notification_mode }}"
           
-          RESULT_FILE="pipeline_results.txt"
-          
-          # Run the main pipeline
-          if eval "cat upload/${{ inputs.file_name }} | ${{ inputs.command }} > $RESULT_FILE"; then
-            echo "[+] Pipeline executed successfully"
+          # Determine notification command based on mode
+          if [ "${{ inputs.notification_mode }}" = "bulk" ]; then
+            # For bulk mode, save output to file first, then send via notify -data
+            BULK_FILE="${{ inputs.bulk_filename }}"
+            echo "[*] Bulk mode: saving results to $BULK_FILE"
+            
+            # Build pipeline with output redirection
+            SCAN_PIPELINE="cat upload/${{ inputs.file_name }} | ${{ inputs.command }} > $BULK_FILE"
+            NOTIFY_PIPELINE="notify -pc temp_creds.yml -silent -data $BULK_FILE"
+            
+            echo "[*] Scan pipeline: $SCAN_PIPELINE"
+            echo "[*] Notify pipeline: $NOTIFY_PIPELINE"
           else
-            echo "[!] Pipeline failed with exit code $?"
-            echo "❌ Scanning failed for upload/${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
-            exit 1
+            # For line mode (default), use standard piping
+            echo "[*] Line mode: sending results line by line"
+            FULL_PIPELINE="cat upload/${{ inputs.file_name }} | ${{ inputs.command }} | notify -pc temp_creds.yml -silent"
+            echo "[*] Full pipeline: $FULL_PIPELINE"
           fi
           
-          # Handle notification modes
-          if [ "${{ inputs.notify_mode }}" = "bulk" ]; then
-            echo "[*] Sending bulk notification..."
-            notify -pc temp_creds.yml -silent -data $RESULT_FILE || true
+          echo "[*] Started at: $(date)"
+          
+          # Execute the pipeline with error handling
+          if [ "${{ inputs.notification_mode }}" = "bulk" ]; then
+            # Execute scan pipeline first
+            if eval "$SCAN_PIPELINE"; then
+              echo "[+] Scan completed successfully"
+              
+              # Check if results file exists and has content
+              if [ -f "$BULK_FILE" ] && [ -s "$BULK_FILE" ]; then
+                echo "[*] Results file created with $(wc -l < $BULK_FILE) lines"
+                echo "[*] Sending bulk notification..."
+                
+                # Send bulk notification
+                if eval "$NOTIFY_PIPELINE"; then
+                  echo "[+] Bulk notification sent successfully"
+                else
+                  echo "[!] Bulk notification failed"
+                  exit 1
+                fi
+              else
+                echo "[*] No results to send (empty or missing results file)"
+                echo "ℹ️ Scan completed but no results found for upload/${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
+              fi
+            else
+              echo "[!] Scan pipeline failed with exit code $?"
+              echo "❌ Scanning failed for upload/${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
+              exit 1
+            fi
           else
-            echo "[*] Sending line-by-line notification..."
-            cat $RESULT_FILE | notify -pc temp_creds.yml -silent || true
+            # Execute line mode pipeline
+            if eval "$FULL_PIPELINE"; then
+              echo "[+] Pipeline completed successfully"
+            else
+              echo "[!] Pipeline failed with exit code $?"
+              echo "❌ Scanning failed for upload/${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
+              exit 1
+            fi
           fi
           
-          echo "[+] Notifications sent"
+          echo "[*] Completed at: $(date)"
+          
+      - name: Upload results (bulk mode only)
+        if: inputs.notification_mode == 'bulk'
+        uses: actions/upload-artifact@v3
+        with:
+          name: scan-results
+          path: ${{ inputs.bulk_filename }}
+          retention-days: 7
           
       - name: Cleanup
         if: always()
         run: |
-          rm -f temp_creds.yml pipeline_results.txt
+          # Clean up temporary files
+          rm -f temp_creds.yml
+          rm -f ${{ inputs.bulk_filename }} 2>/dev/null || true
           rm -rf nuclei-templates
           echo "[+] Cleanup completed"
