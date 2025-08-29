@@ -160,6 +160,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Made with ❤️ by bug bounty hunters, for bug bounty hunters**
 
-If this tool helped you land a bounty, consider [buying me a coffee](https://buymeacoffee.com/the5orcerer) ☕
+If this tool helped you land a bounty, consider [buying me a coffee](https://buymeacoffee.com/rootplinix) ☕
 
 </div>
