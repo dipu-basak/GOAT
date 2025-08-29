@@ -10,7 +10,15 @@ on:
       command:
         required: true
         type: string
-        description: "Command to execute (cat filename and notify will be auto-handled)"
+        description: "Command to execute (cat filename will be auto-handled)"
+      notify_mode:
+        required: false
+        type: choice
+        default: "line"
+        description: "Notification mode (line = line by line, bulk = full file)"
+        options:
+          - line
+          - bulk
 
 jobs:
   scan:
@@ -33,7 +41,7 @@ jobs:
           echo "[*] Installing ProjectDiscovery tools (not cached)..."
           mkdir -p ~/tools
           
-          # Download pre-compiled binaries (much faster than go install)
+          # Download pre-compiled binaries (faster than go install)
           echo "[*] Downloading subfinder..."
           wget -q https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_2.8.0_linux_amd64.zip
           unzip -o -q subfinder_2.8.0_linux_amd64.zip
@@ -53,21 +61,25 @@ jobs:
           wget -q https://github.com/projectdiscovery/notify/releases/latest/download/notify_1.0.7_linux_amd64.zip
           unzip -o -q notify_1.0.7_linux_amd64.zip
           mv notify ~/tools/
+
+          echo "[*] Downloading katana..."
+          wget -q https://github.com/projectdiscovery/katana/releases/latest/download/katana_1.1.1_linux_amd64.zip
+          unzip -o -q katana_1.1.1_linux_amd64.zip
+          mv katana ~/tools/
           
           chmod +x ~/tools/*
           echo "[+] Tools downloaded successfully"
           
       - name: Setup tool paths
         run: |
-          # Add tools to PATH
           echo "$HOME/tools" >> $GITHUB_PATH
           
-          # Verify installations
           echo "[*] Verifying tool installations..."
           ~/tools/subfinder -version || echo "subfinder not found"
           ~/tools/httpx -version || echo "httpx not found" 
           ~/tools/nuclei -version || echo "nuclei not found"
           ~/tools/notify -version || echo "notify not found"
+          ~/tools/katana -version || echo "katana not found"
           
       - name: Cache nuclei templates
         id: cache-templates
@@ -116,29 +128,33 @@ jobs:
           echo "[*] Building pipeline..."
           echo "[*] Input file: upload/${{ inputs.file_name }}"
           echo "[*] Command: ${{ inputs.command }}"
+          echo "[*] Notify mode: ${{ inputs.notify_mode }}"
           
-          # Build the complete pipeline
-          FULL_PIPELINE="cat upload/${{ inputs.file_name }} | ${{ inputs.command }} | notify -pc temp_creds.yml -silent"
+          RESULT_FILE="pipeline_results.txt"
           
-          echo "[*] Final pipeline: $FULL_PIPELINE"
-          echo "[*] Started at: $(date)"
-          
-          # Execute the complete pipeline with error handling
-          if eval "$FULL_PIPELINE"; then
-            echo "[+] Pipeline completed successfully"
+          # Run the main pipeline
+          if eval "cat upload/${{ inputs.file_name }} | ${{ inputs.command }} > $RESULT_FILE"; then
+            echo "[+] Pipeline executed successfully"
           else
             echo "[!] Pipeline failed with exit code $?"
-            # Send failure notification
             echo "❌ Scanning failed for upload/${{ inputs.file_name }}" | notify -pc temp_creds.yml -silent || true
             exit 1
           fi
           
-          echo "[*] Completed at: $(date)"
+          # Handle notification modes
+          if [ "${{ inputs.notify_mode }}" = "bulk" ]; then
+            echo "[*] Sending bulk notification..."
+            notify -pc temp_creds.yml -silent -data $RESULT_FILE || true
+          else
+            echo "[*] Sending line-by-line notification..."
+            cat $RESULT_FILE | notify -pc temp_creds.yml -silent || true
+          fi
+          
+          echo "[+] Notifications sent"
           
       - name: Cleanup
         if: always()
         run: |
-          # Clean up temporary files
-          rm -f temp_creds.yml
+          rm -f temp_creds.yml pipeline_results.txt
           rm -rf nuclei-templates
           echo "[+] Cleanup completed"
