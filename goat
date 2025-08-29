@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Configuration
-GITHUB_TOKEN="GITHUB_TOKEN"
-GITHUB_REPO="the5orcerer/git-auto"
+GITHUB_TOKEN="GITHUB_TOEKN"
+GITHUB_REPO="GITHUB_REPO"
 GITHUB_API="https://api.github.com"
 
 # Colors for output
@@ -15,6 +15,35 @@ NC='\033[0m' # No Color
 # Parse arguments
 file=""
 command=""
+notification_mode="line"   # default
+bulk_filename="results.txt"   # default
+
+show_help() {
+  echo "Usage: $0 -f <filename> -c <command> [-m line|bulk] [-b bulk_filename]"
+  echo ""
+  echo "Options:"
+  echo "  -f <filename>       Input file to upload and process (required)"
+  echo "  -c <command>        Command to execute on the file (required)"
+  echo "  -m <mode>           Notification mode: 'line' (default) or 'bulk'"
+  echo "  -b <bulk_filename>  Output filename for bulk mode (default: results.txt)"
+  echo ""
+  echo "Examples:"
+  echo "  # Line mode (real-time notifications)"
+  echo "  $0 -f domains.txt -c \"subfinder -silent | httpx -silent\""
+  echo ""
+  echo "  # Bulk mode (single file notification)"
+  echo "  $0 -f urls.txt -c \"katana -silent -d 2 -jc\" -m bulk -b crawled.txt"
+  echo ""
+  echo "  # Complex pipeline with nuclei"
+  echo "  $0 -f domains.txt -c \"subfinder -silent | httpx -silent | nuclei -es info\" -m bulk"
+  echo ""
+  echo "Available ProjectDiscovery tools:"
+  echo "  - subfinder: Subdomain discovery"
+  echo "  - httpx: Fast HTTP probe"
+  echo "  - nuclei: Vulnerability scanner"
+  echo "  - katana: Web crawler"
+  echo "  - notify: Notification sender"
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -26,10 +55,21 @@ while [[ $# -gt 0 ]]; do
       command="$2"
       shift 2
       ;;
+    -m)
+      notification_mode="$2"
+      shift 2
+      ;;
+    -b)
+      bulk_filename="$2"
+      shift 2
+      ;;
+    -h|--help)
+      show_help
+      exit 0
+      ;;
     *)
       echo -e "${RED}[!] Unknown argument: $1${NC}"
-      echo "Usage: $0 -f <filename> -c <command>"
-      echo "Example: $0 -f domains.txt -c \"subfinder -nW | httpx -server -title | nuclei -es info\""
+      show_help
       exit 1
       ;;
   esac
@@ -38,16 +78,25 @@ done
 # Validate arguments
 if [[ -z "$file" ]]; then
   echo -e "${RED}[!] You must provide an input file with -f${NC}"
+  show_help
   exit 1
 fi
 
 if [[ -z "$command" ]]; then
   echo -e "${RED}[!] You must provide a command with -c${NC}"
+  show_help
   exit 1
 fi
 
 if [[ ! -f "$file" ]]; then
   echo -e "${RED}[!] Input file $file not found${NC}"
+  exit 1
+fi
+
+# Validate notification mode
+if [[ "$notification_mode" != "line" && "$notification_mode" != "bulk" ]]; then
+  echo -e "${RED}[!] Invalid notification mode: $notification_mode${NC}"
+  echo "Valid modes are: line, bulk"
   exit 1
 fi
 
@@ -70,8 +119,12 @@ if [[ $file_size -gt $max_size ]]; then
 fi
 
 echo -e "${BLUE}[*] Starting upload and workflow trigger...${NC}"
-echo -e "${YELLOW}[*] File: $filename${NC}"
+echo -e "${YELLOW}[*] File: $filename ($(( file_size / 1024 ))KB)${NC}"
 echo -e "${YELLOW}[*] Command: $command${NC}"
+echo -e "${YELLOW}[*] Notification Mode: $notification_mode${NC}"
+if [[ "$notification_mode" == "bulk" ]]; then
+  echo -e "${YELLOW}[*] Bulk Filename: $bulk_filename${NC}"
+fi
 
 # Check for jq dependency
 if ! command -v jq &> /dev/null; then
@@ -99,12 +152,13 @@ temp_b64=$(mktemp)
 trap "rm -f $temp_json $temp_b64" EXIT
 
 # Create base64 content in temporary file
+echo -e "${BLUE}[*] Encoding file to base64...${NC}"
 base64 -w 0 "$file" > "$temp_b64"
 
 # Create JSON payload using a here-document approach
 echo -e "${BLUE}[*] Preparing upload payload...${NC}"
 
-# Build JSON step by step to avoid argument length issues
+# Build JSON step by step
 echo '{' > "$temp_json"
 echo "  \"message\": \"Upload $filename for scanning\"," >> "$temp_json"
 echo -n "  \"content\": \"" >> "$temp_json"
@@ -129,19 +183,33 @@ if echo "$upload_response" | jq -e '.content' >/dev/null 2>&1; then
   echo -e "${GREEN}[+] File uploaded successfully${NC}"
 else
   echo -e "${RED}[!] File upload failed${NC}"
-  echo "$upload_response" | jq '.'
+  echo "$upload_response" | jq '.' 2>/dev/null || echo "$upload_response"
   exit 1
 fi
 
-# Trigger GitHub workflow
+# Trigger GitHub workflow with updated parameters
 echo -e "${BLUE}[*] Triggering GitHub workflow...${NC}"
+
+# Build workflow payload with proper parameter names matching the workflow
 workflow_payload='{
   "ref": "main",
   "inputs": {
     "file_name": "'"$filename"'",
-    "command": "'"$command"'"
+    "command": "'"$command"'",
+    "notification_mode": "'"$notification_mode"'"'
+
+# Add bulk_filename only if in bulk mode
+if [[ "$notification_mode" == "bulk" ]]; then
+  workflow_payload+=',
+    "bulk_filename": "'"$bulk_filename"'"'
+fi
+
+workflow_payload+='
   }
 }'
+
+echo -e "${BLUE}[*] Workflow payload:${NC}"
+echo "$workflow_payload" | jq '.' 2>/dev/null || echo "$workflow_payload"
 
 workflow_response=$(curl -s -X POST \
   -H "Authorization: token $GITHUB_TOKEN" \
@@ -153,9 +221,17 @@ if [[ -z "$workflow_response" ]]; then
   echo -e "${GREEN}[+] Workflow triggered successfully${NC}"
   echo -e "${GREEN}[+] Check your Telegram for results${NC}"
   echo -e "${BLUE}[*] Monitor workflow: https://github.com/$GITHUB_REPO/actions${NC}"
+  
+  # Show mode-specific info
+  if [[ "$notification_mode" == "line" ]]; then
+    echo -e "${BLUE}[*] Line mode: You'll receive real-time notifications as results are found${NC}"
+  else
+    echo -e "${BLUE}[*] Bulk mode: You'll receive a single file ($bulk_filename) with all results${NC}"
+    echo -e "${BLUE}[*] Results will also be available as GitHub Actions artifacts${NC}"
+  fi
 else
   echo -e "${RED}[!] Workflow trigger failed${NC}"
-  echo "$workflow_response"
+  echo "$workflow_response" | jq '.' 2>/dev/null || echo "$workflow_response"
   exit 1
 fi
 
