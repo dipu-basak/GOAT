@@ -60,12 +60,18 @@ fi
 # Get just the filename without path
 filename=$(basename "$file")
 
+# Check file size (GitHub has ~25MB limit for base64 content)
+file_size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+max_size=$((18 * 1024 * 1024))  # 18MB limit to account for base64 encoding overhead
+
+if [[ $file_size -gt $max_size ]]; then
+  echo -e "${RED}[!] File is too large ($file_size bytes). Maximum size is ~18MB${NC}"
+  exit 1
+fi
+
 echo -e "${BLUE}[*] Starting upload and workflow trigger...${NC}"
 echo -e "${YELLOW}[*] File: $filename${NC}"
 echo -e "${YELLOW}[*] Command: $command${NC}"
-
-# Read file content and encode to base64
-file_content=$(base64 -w 0 "$file")
 
 # Check for jq dependency
 if ! command -v jq &> /dev/null; then
@@ -87,23 +93,36 @@ else
   echo -e "${BLUE}[*] New file will be created in upload directory${NC}"
 fi
 
-# Prepare JSON payload for upload directory
-json_payload='{
-  "message": "Upload '"$filename"' for scanning",
-  "content": "'"$file_content"'"'
+# Create temporary file for JSON payload
+temp_json=$(mktemp)
+temp_b64=$(mktemp)
+trap "rm -f $temp_json $temp_b64" EXIT
+
+# Create base64 content in temporary file
+base64 -w 0 "$file" > "$temp_b64"
+
+# Create JSON payload using a here-document approach
+echo -e "${BLUE}[*] Preparing upload payload...${NC}"
+
+# Build JSON step by step to avoid argument length issues
+echo '{' > "$temp_json"
+echo "  \"message\": \"Upload $filename for scanning\"," >> "$temp_json"
+echo -n "  \"content\": \"" >> "$temp_json"
+cat "$temp_b64" >> "$temp_json"
+echo "\"" >> "$temp_json"
 
 if [[ -n "$sha" ]]; then
-  json_payload+=', "sha": "'"$sha"'"'
+  echo ",  \"sha\": \"$sha\"" >> "$temp_json"
 fi
 
-json_payload+='}'
+echo '}' >> "$temp_json"
 
 # Upload file to GitHub upload directory
 echo -e "${BLUE}[*] Uploading file to GitHub upload directory...${NC}"
 upload_response=$(curl -s -X PUT \
   -H "Authorization: token $GITHUB_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "$json_payload" \
+  -d @"$temp_json" \
   "$GITHUB_API/repos/$GITHUB_REPO/contents/upload/$filename")
 
 if echo "$upload_response" | jq -e '.content' >/dev/null 2>&1; then
