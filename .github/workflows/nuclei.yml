@@ -31,11 +31,11 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Cache tools
         id: cache-tools
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/tools
           key: pdtools-v2-${{ runner.os }}
@@ -90,7 +90,7 @@ jobs:
           
       - name: Cache nuclei templates
         id: cache-templates
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: nuclei-templates
           key: nuclei-templates-${{ github.run_id }}
@@ -200,7 +200,7 @@ jobs:
           
       - name: Upload results (bulk mode only)
         if: inputs.notification_mode == 'bulk'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: scan-results
           path: ${{ inputs.bulk_filename }}
