@@ -68,7 +68,7 @@ jobs:
           mv katana ~/tools/
           
           echo "[*] Downloading notify..."
-          wget -q https://github.com/projectdiscovery/notify/releases/latest/download/notify_1.0.7_linux_amd64.zip
+          wget -q https://github.com/projectdiscovery/notify/releases/download/v1.0.7/notify_1.0.7_linux_amd64.zip
           unzip -o -q notify_1.0.7_linux_amd64.zip
           mv notify ~/tools/
           
