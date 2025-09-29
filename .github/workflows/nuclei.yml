@@ -48,8 +48,8 @@ jobs:
           
           # Download pre-compiled binaries (much faster than go install)
           echo "[*] Downloading subfinder..."
-          wget -q https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_2.8.0_linux_amd64.zip
-          unzip -o -q subfinder_2.8.0_linux_amd64.zip
+          wget -q https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_2.9.0_linux_amd64.zip
+          unzip -o -q subfinder_2.9.0_linux_amd64.zip
           mv subfinder ~/tools/
           
           echo "[*] Downloading httpx..."
