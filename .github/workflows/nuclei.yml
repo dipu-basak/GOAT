@@ -37,62 +37,62 @@ jobs:
         id: cache-tools
         uses: actions/cache@v4
         with:
-          path: ~/tools
+          path: ${{ github.workspace }}/tools
           key: pdtools-v2-${{ runner.os }}
           
       - name: Install security tools
         if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
           echo "[*] Installing ProjectDiscovery tools (not cached)..."
-          mkdir -p ~/tools
+          mkdir -p "$GITHUB_WORKSPACE/tools"
           
           # Download pre-compiled binaries (much faster than go install)
           echo "[*] Downloading subfinder..."
           wget -q https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_2.10.1_linux_amd64.zip
           unzip -o -q subfinder_2.10.1_linux_amd64.zip
-          mv subfinder ~/tools/
+          mv subfinder "$GITHUB_WORKSPACE/tools/"
           
           echo "[*] Downloading httpx..."
           wget -q https://github.com/projectdiscovery/httpx/releases/latest/download/httpx_1.7.3_linux_amd64.zip
           unzip -o -q httpx_1.7.3_linux_amd64.zip
-          mv httpx ~/tools/
+          mv httpx "$GITHUB_WORKSPACE/tools/"
           
           echo "[*] Downloading nuclei..."
           wget -q https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_3.6.0_linux_amd64.zip
           unzip -o -q nuclei_3.6.0_linux_amd64.zip
-          mv nuclei ~/tools/
+          mv nuclei "$GITHUB_WORKSPACE/tools/"
           
           echo "[*] Downloading katana..."
           wget -q https://github.com/projectdiscovery/katana/releases/latest/download/katana_1.3.0_linux_amd64.zip
           unzip -o -q katana_1.3.0_linux_amd64.zip
-          mv katana ~/tools/
+          mv katana "$GITHUB_WORKSPACE/tools/"
           
           echo "[*] Downloading notify..."
           wget -q https://github.com/projectdiscovery/notify/releases/download/v1.0.7/notify_1.0.7_linux_amd64.zip
           unzip -o -q notify_1.0.7_linux_amd64.zip
-          mv notify ~/tools/
+          mv notify "$GITHUB_WORKSPACE/tools/"
           
-          chmod +x ~/tools/*
+          chmod +x "$GITHUB_WORKSPACE/tools"/*
           echo "[+] Tools downloaded successfully"
           
       - name: Setup tool paths
         run: |
           # Add tools to PATH
-          echo "$HOME/tools" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/tools" >> $GITHUB_PATH
           
           # Verify installations
           echo "[*] Verifying tool installations..."
-          ~/tools/subfinder -version || echo "subfinder not found"
-          ~/tools/httpx -version || echo "httpx not found" 
-          ~/tools/nuclei -version || echo "nuclei not found"
-          ~/tools/katana -version || echo "katana not found"
-          ~/tools/notify -version || echo "notify not found"
+          "$GITHUB_WORKSPACE/tools/subfinder" -version || echo "subfinder not found"
+          "$GITHUB_WORKSPACE/tools/httpx" -version || echo "httpx not found"
+          "$GITHUB_WORKSPACE/tools/nuclei" -version || echo "nuclei not found"
+          "$GITHUB_WORKSPACE/tools/katana" -version || echo "katana not found"
+          "$GITHUB_WORKSPACE/tools/notify" -version || echo "notify not found"
           
       - name: Cache nuclei templates
         id: cache-templates
         uses: actions/cache@v4
         with:
-          path: nuclei-templates
+          path: ${{ github.workspace }}/nuclei-templates
           key: nuclei-templates-${{ github.run_id }}
           restore-keys: nuclei-templates-
           
@@ -209,8 +209,8 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          # Clean up temporary files
+          # Clean up temporary files but DO NOT remove cached directories
           rm -f temp_creds.yml
           rm -f ${{ inputs.bulk_filename }} 2>/dev/null || true
-          rm -rf nuclei-templates
+          # keep nuclei-templates and tools directories intact so cache can be saved
           echo "[+] Cleanup completed"
